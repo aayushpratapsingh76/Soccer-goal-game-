@@ -1,0 +1,1178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Pixel Kick Soccer</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #080710;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+            font-family: monospace;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        canvas {
+            background-color: #000;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.8);
+            image-rendering: pixelated;
+            max-width: 100%;
+            max-height: 100vh;
+            aspect-ratio: 360 / 640;
+        }
+    </style>
+</head>
+<body>
+
+<canvas id="gameCanvas" width="360" height="640"></canvas>
+
+<script>
+// === CONFIG ===
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+ctx.imageSmoothingEnabled = false;
+
+// Prevent mobile gestures and scrolling
+document.body.style.overflow = 'hidden';
+canvas.addEventListener('touchstart', e => e.preventDefault(), { passive: false });
+canvas.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
+
+const GAME_WIDTH = 360;
+const GAME_HEIGHT = 640;
+
+// === AUDIO ===
+let audioCtx = null;
+
+function initAudio() {
+    if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+    }
+}
+
+function playGoalSound() {
+    initAudio();
+    const now = audioCtx.currentTime;
+    const notes = [523.25, 659.25, 783.99]; // C5, E5, G5
+    notes.forEach((freq, idx) => {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = "square";
+        osc.frequency.setValueAtTime(freq, now + idx * 0.15);
+        gain.gain.setValueAtTime(0.08, now + idx * 0.15);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.15 + 0.14);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start(now + idx * 0.15);
+        osc.stop(now + idx * 0.15 + 0.15);
+    });
+
+    // Crowd cheer effect: white noise burst, 800ms duration, gain 0.3
+    const bufferSize = audioCtx.sampleRate * 0.8;
+    const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+        data[i] = Math.random() * 2 - 1;
+    }
+    const noiseNode = audioCtx.createBufferSource();
+    noiseNode.buffer = buffer;
+
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = "bandpass";
+    filter.frequency.value = 1000;
+    filter.Q.value = 1.0;
+
+    const noiseGain = audioCtx.createGain();
+    noiseGain.gain.setValueAtTime(0.12, now);
+    noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.8);
+
+    noiseNode.connect(filter);
+    filter.connect(noiseGain);
+    noiseGain.connect(audioCtx.destination);
+    noiseNode.start(now);
+    noiseNode.stop(now + 0.8);
+}
+
+function playSavedSound() {
+    initAudio();
+    const now = audioCtx.currentTime;
+    const notes = [392.00, 293.66]; // G4, D4
+    notes.forEach((freq, idx) => {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = "sawtooth";
+        osc.frequency.setValueAtTime(freq, now + idx * 0.2);
+        gain.gain.setValueAtTime(0.08, now + idx * 0.2);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.2 + 0.19);
+        
+        const delay = audioCtx.createDelay();
+        delay.delayTime.value = 0.2;
+        const feedback = audioCtx.createGain();
+        feedback.gain.value = 0.3;
+        
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        
+        gain.connect(delay);
+        delay.connect(feedback);
+        feedback.connect(delay);
+        delay.connect(audioCtx.destination);
+        
+        osc.start(now + idx * 0.2);
+        osc.stop(now + idx * 0.2 + 0.4);
+    });
+}
+
+function playMissSound() {
+    initAudio();
+    const now = audioCtx.currentTime;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(100, now);
+    
+    gain.gain.setValueAtTime(0.2, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+    
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start(now);
+    osc.stop(now + 0.3);
+}
+
+function playKickSound() {
+    initAudio();
+    const now = audioCtx.currentTime;
+    const bufferSize = audioCtx.sampleRate * 0.08;
+    const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+        data[i] = Math.random() * 2 - 1;
+    }
+    const noiseNode = audioCtx.createBufferSource();
+    noiseNode.buffer = buffer;
+    
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = "highpass";
+    filter.frequency.value = 2000;
+    
+    const gain = audioCtx.createGain();
+    gain.gain.setValueAtTime(0.3, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+    
+    noiseNode.connect(filter);
+    filter.connect(gain);
+    gain.connect(audioCtx.destination);
+    
+    noiseNode.start(now);
+    noiseNode.stop(now + 0.08);
+}
+
+function playButtonClickSound() {
+    initAudio();
+    const now = audioCtx.currentTime;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    
+    osc.type = "square";
+    osc.frequency.setValueAtTime(880, now);
+    
+    gain.gain.setValueAtTime(0.06, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
+    
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start(now);
+    osc.stop(now + 0.05);
+}
+
+// === SPRITES (draw functions) ===
+function parseSprite(strArr) {
+    return strArr.map(row => row.split('').map(char => char === '.' ? 0 : parseInt(char, 36)));
+}
+
+// Color Palettes
+const GK_PALETTE = {
+    1: "#ffcc99", // Skin
+    2: "#d02020", // Red Jersey
+    3: "#ffd700", // Yellow Gloves
+    4: "#111111", // Black Shorts/Shoes
+    5: "#ffffff", // White Socks
+    6: "#801010"  // Shadow / Hair
+};
+
+const PLAYER_PALETTE = {
+    1: "#ffcc99", // Skin
+    2: "#2050d0", // Blue Jersey
+    3: "#ffffff", // White Shorts/Socks
+    4: "#111111", // Black / Shoes / Hair
+    5: "#102080"  // Dark Blue Detail
+};
+
+const BALL_PALETTE = {
+    1: "#ffffff", // White Leather
+    2: "#111111"  // Black Panels
+};
+
+const GK_IDLE_1 = parseSprite([
+    "......4444......",
+    ".....411114.....",
+    ".....411114.....",
+    "......1111......",
+    "....32222223....",
+    "....32222223....",
+    "....32222223....",
+    ".....222222.....",
+    ".....222222.....",
+    ".....444444.....",
+    ".....44..44.....",
+    ".....44..44.....",
+    ".....11..11.....",
+    ".....11..11.....",
+    ".....55..55.....",
+    ".....55..55.....",
+    "....444..444...."
+]);
+
+const GK_IDLE_2 = parseSprite([
+    "......4444......",
+    ".....411114.....",
+    ".....411114.....",
+    "......1111......",
+    "....32222223....",
+    "....32222223....",
+    "....32222223....",
+    ".....222222.....",
+    ".....222222.....",
+    ".....444444.....",
+    ".....444.444....",
+    ".....44..44.....",
+    ".....11..11.....",
+    ".....11..11.....",
+    ".....55..55.....",
+    ".....55..55.....",
+    "....444..444...."
+]);
+
+const GK_DIVE = parseSprite([
+    "......4444......",
+    ".....411114.....",
+    ".....411114.....",
+    "......1111......",
+    "..3...222222...3",
+    "...3..222222..3.",
+    "....322222223...",
+    ".....222222.....",
+    ".....222222.....",
+    ".....444444.....",
+    ".....44..44.....",
+    ".....44..44.....",
+    ".....11..11.....",
+    ".....11..11.....",
+    ".....55..55.....",
+    ".....55..55.....",
+    "....444..444...."
+]);
+
+const PLAYER_IDLE = parseSprite([
+    "......4444......",
+    ".....411114.....",
+    ".....411114.....",
+    "......1111......",
+    ".....222222.....",
+    "....22222222....",
+    "....22222222....",
+    "....22222222....",
+    ".....333333.....",
+    ".....33..33.....",
+    ".....33..33.....",
+    ".....11..11.....",
+    ".....33..33.....",
+    ".....33..33.....",
+    "....444..444...."
+]);
+
+const PLAYER_KICK = parseSprite([
+    "......4444......",
+    ".....411114.....",
+    ".....411114.....",
+    "......1111......",
+    ".....222222.....",
+    "....22222222....",
+    "....22222222....",
+    "....22222222....",
+    ".....333333.....",
+    ".....33..33.....",
+    ".....33...33....",
+    ".....11...111...",
+    ".....33....33...",
+    ".....33.....44..",
+    "....444........."
+]);
+
+const BALL_SPRITE = parseSprite([
+    "..1111..",
+    ".112211.",
+    "12111211",
+    "12111211",
+    "11221121",
+    "11221121",
+    ".111121.",
+    "..1111.."
+]);
+
+// Custom 5x5 Block Pixel Font Data
+const FONT_5X5 = {
+    'A': [" ### ", "#   #", "#####", "#   #", "#   #"],
+    'B': ["#### ", "#   #", "#### ", "#   #", "#### "],
+    'C': [" ####", "#    ", "#    ", "#    ", " ####"],
+    'D': ["#### ", "#   #", "#   #", "#   #", "#### "],
+    'E': ["#####", "#    ", "#### ", "#    ", "#####"],
+    'F': ["#####", "#    ", "#### ", "#    ", "#    "],
+    'G': [" ####", "#    ", "#  ##", "#   #", " ####"],
+    'H': ["#   #", "#   #", "#####", "#   #", "#   #"],
+    'I': [" ### ", "  #  ", "  #  ", "  #  ", " ### "],
+    'J': ["  ###", "    #", "    #", "    #", "#### "],
+    'K': ["#  ##", "# #  ", "##   ", "# #  ", "#  ##"],
+    'L': ["#    ", "#    ", "#    ", "#    ", "#####"],
+    'M': ["#   #", "## ##", "# # #", "#   #", "#   #"],
+    'N': ["#   #", "##  #", "# # #", "#  ##", "#   #"],
+    'O': [" ### ", "#   #", "#   #", "#   #", " ### "],
+    'P': ["#####", "#   #", "#####", "#    ", "#    "],
+    'Q': [" ### ", "#   #", "#   #", "#  ##", " ####"],
+    'R': ["#### ", "#   #", "#### ", "# #  ", "#  ##"],
+    'S': [" ####", "#    ", " ### ", "    #", "#### "],
+    'T': ["#####", "  #  ", "  #  ", "  #  ", "  #  "],
+    'U': ["#   #", "#   #", "#   #", "#   #", " ### "],
+    'V': ["#   #", "#   #", "#   #", " # # ", "  #  "],
+    'W': ["#   #", "#   #", "# # #", "## ##", "#   #"],
+    'X': ["#   #", " # # ", "  #  ", " # # ", "#   #"],
+    'Y': ["#   #", " # # ", "  #  ", "  #  ", "  #  "],
+    'Z': ["#####", "   # ", "  #  ", " #   ", "#####"],
+    '1': ["  #  ", " ##  ", "  #  ", "  #  ", " ### "],
+    '2': [" ### ", "    #", " ### ", "#    ", "#####"],
+    '3': ["#### ", "    #", " ### ", "    #", "#### "],
+    '4': ["#  # ", "#  # ", "#####", "   # ", "   # "],
+    '5': ["#####", "#    ", "#### ", "    #", "#### "],
+    '0': [" ### ", "#   #", "# # #", "#   #", " ### "],
+    '/': ["   # ", "  #  ", "  #  ", " #   ", "#    "],
+    '!': ["  #  ", "  #  ", "  #  ", "     ", "  #  "],
+    ':': ["     ", "  #  ", "     ", "  #  ", "     "],
+    '|': ["  #  ", "  #  ", "  #  ", "  #  ", "  #  "],
+    '-': ["     ", "     ", " ### ", "     ", "     "],
+    '?': ["#### ", "    #", "  ## ", "     ", "  #  "],
+    '(': ["  #  ", " #   ", " #   ", " #   ", "  #  "],
+    ')': ["  #  ", "   # ", "   # ", "   # ", "  #  "],
+    '[': ["  ## ", "  #  ", "  #  ", "  #  ", "  ## "],
+    ']': [" ##  ", "  #  ", "  #  ", "  #  ", " ##  "],
+    'C': [" ### ", "#  # ", "#    ", "#  # ", " ### "] // Camera glyph wrapper
+};
+
+function drawPixelSprite(ctx, x, y, matrix, palette, scale = 4, rotation = 0) {
+    ctx.save();
+    ctx.translate(x, y);
+    if (rotation !== 0) {
+        ctx.rotate(rotation);
+    }
+    const rows = matrix.length;
+    const cols = matrix[0].length;
+    const offsetX = - (cols * scale) / 2;
+    const offsetY = - (rows * scale) / 2;
+    for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+            const colorIdx = matrix[r][c];
+            if (colorIdx > 0 && palette[colorIdx]) {
+                ctx.fillStyle = palette[colorIdx];
+                ctx.fillRect(Math.floor(offsetX + c * scale), Math.floor(offsetY + r * scale), Math.ceil(scale), Math.ceil(scale));
+            }
+        }
+    }
+    ctx.restore();
+}
+
+function drawPixelText(ctx, text, x, y, pixelSize, color) {
+    ctx.fillStyle = color;
+    const uppercaseText = text.toUpperCase();
+    let currentX = x;
+    for (let i = 0; i < uppercaseText.length; i++) {
+        const char = uppercaseText[i];
+        if (char === ' ') {
+            currentX += 4 * pixelSize;
+            continue;
+        }
+        const glyph = FONT_5X5[char];
+        if (glyph) {
+            for (let r = 0; r < 5; r++) {
+                for (let c = 0; c < 5; c++) {
+                    if (glyph[r][c] === '#') {
+                        ctx.fillRect(currentX + c * pixelSize, y + r * pixelSize, pixelSize, pixelSize);
+                    }
+                }
+            }
+            currentX += 6 * pixelSize;
+        } else {
+            currentX += 4 * pixelSize;
+        }
+    }
+}
+
+// === GAME STATE ===
+let state = "title"; // "title" | "playing" | "result"
+let difficulty = "medium"; // "easy" | "medium" | "hard"
+let scorePlayer = 0;
+let scoreGK = 0;
+let currentRound = 1;
+let shotOutcome = ""; // "GOAL!", "SAVED!", "MISS!"
+let outcomeTimer = 0;
+let isPowering = false;
+let power = 0; // 0.0 to 1.0
+let targetX = 180;
+let targetY = 80;
+let anchorX = 0;
+let anchorY = 0;
+let confetti = [];
+
+const gk = {
+    x: 180,
+    y: 120,
+    frame: 0,
+    animTimer: 0,
+    state: "idle", // "idle" | "reacting" | "diving"
+    targetX: 180,
+    reactionTimer: 0,
+    speed: 4,
+    isDiving: false
+};
+
+const player = {
+    x: 145,
+    y: 500,
+    state: "idle", // "idle" | "kicking"
+    kickTimer: 0
+};
+
+const ball = {
+    x: 180,
+    y: 480,
+    vx: 0,
+    vy: 0,
+    state: "idle", // "idle" | "preparing" | "moving" | "deflected" | "goal" | "miss"
+    targetX: 180,
+    targetY: 80,
+    shotPower: 0,
+    kickDelay: 0,
+    angle: 0,
+    evaluated: false
+};
+
+function resetRound() {
+    ball.x = 180;
+    ball.y = 480;
+    ball.vx = 0;
+    ball.vy = 0;
+    ball.state = "idle";
+    ball.evaluated = false;
+    ball.angle = 0;
+    
+    gk.x = 180;
+    gk.y = 120;
+    gk.state = "idle";
+    gk.isDiving = false;
+    
+    player.state = "idle";
+    player.kickTimer = 0;
+    
+    shotOutcome = "";
+    isPowering = false;
+    power = 0;
+}
+
+function startMatch() {
+    scorePlayer = 0;
+    scoreGK = 0;
+    currentRound = 1;
+    resetRound();
+    state = "playing";
+}
+
+function spawnConfetti() {
+    confetti = [];
+    const colors = ["#ff3333", "#33ff33", "#3333ff", "#ffd700", "#ff33ff", "#33ffff"];
+    for (let i = 0; i < 80; i++) {
+        confetti.push({
+            x: Math.random() * GAME_WIDTH,
+            y: Math.random() * -300,
+            vx: (Math.random() - 0.5) * 3,
+            vy: 2 + Math.random() * 3,
+            color: colors[Math.floor(Math.random() * colors.length)],
+            size: 3 + Math.random() * 4
+        });
+    }
+}
+
+function updateConfetti() {
+    confetti.forEach(p => {
+        p.x += p.vx;
+        p.y += p.vy;
+        if (p.y > GAME_HEIGHT) {
+            p.y = -10;
+            p.x = Math.random() * GAME_WIDTH;
+        }
+    });
+}
+
+function drawConfetti(ctx) {
+    confetti.forEach(p => {
+        ctx.fillStyle = p.color;
+        ctx.fillRect(p.x, p.y, p.size, p.size);
+    });
+}
+
+// === AI GOALKEEPER ===
+function updateGoalkeeper() {
+    // 2-frame Idle animation
+    gk.animTimer++;
+    if (gk.animTimer % 20 === 0) {
+        gk.frame = gk.frame === 0 ? 1 : 0;
+    }
+
+    if (ball.state === "moving" || ball.state === "preparing") {
+        if (gk.state === "idle") {
+            // Schedule GK reaction based on difficulty
+            let delayMs = 300;
+            let gkSpeed = 4;
+            if (difficulty === "easy") {
+                delayMs = 400 + Math.random() * 300;
+                gkSpeed = 3;
+            } else if (difficulty === "medium") {
+                delayMs = 200 + Math.random() * 300;
+                gkSpeed = 4;
+            } else if (difficulty === "hard") {
+                delayMs = 100 + Math.random() * 200;
+                gkSpeed = 6;
+            }
+            gk.reactionTimer = Math.floor(delayMs / 16.6); // conversion to approx. frames
+            gk.speed = gkSpeed;
+            gk.state = "reacting";
+            gk.targetX = ball.targetX;
+        }
+    }
+
+    if (gk.state === "reacting") {
+        if (gk.reactionTimer > 0) {
+            gk.reactionTimer--;
+        } else {
+            gk.state = "diving";
+        }
+    }
+
+    if (gk.state === "diving") {
+        const dx = gk.targetX - gk.x;
+        if (Math.abs(dx) > gk.speed) {
+            gk.x += Math.sign(dx) * gk.speed;
+        } else {
+            gk.x = gk.targetX;
+        }
+        
+        // Dive styling
+        if (Math.abs(gk.targetX - 180) > 40) {
+            gk.isDiving = true;
+        }
+        // Keep goalie in visual post bounds
+        gk.x = Math.max(80, Math.min(280, gk.x));
+    }
+}
+
+// === PHYSICS ===
+function fireShot(shotPower) {
+    ball.targetX = targetX;
+    ball.targetY = targetY;
+    ball.shotPower = Math.max(0.1, shotPower);
+    ball.kickDelay = 5; // Visual frame delay
+    ball.state = "preparing";
+    
+    player.state = "kicking";
+    player.kickTimer = 15;
+    
+    playKickSound();
+}
+
+function updatePhysics() {
+    if (player.kickTimer > 0) {
+        player.kickTimer--;
+        if (player.kickTimer === 0) {
+            player.state = "idle";
+        }
+    }
+
+    if (ball.state === "preparing") {
+        ball.kickDelay--;
+        if (ball.kickDelay <= 0) {
+            ball.state = "moving";
+            
+            const dx = ball.targetX - 180;
+            const dy = ball.targetY - 480;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            const speed = 6 + ball.shotPower * 8; // scaling between 6 and 14
+            ball.vx = (dx / dist) * speed;
+            ball.vy = (dy / dist) * speed;
+        }
+    }
+
+    if (ball.state === "moving") {
+        ball.x += ball.vx;
+        ball.y += ball.vy;
+        ball.angle += 0.25;
+
+        // Collision Check at Goal Line Plane (y = 120)
+        if (ball.y <= 120 && !ball.evaluated) {
+            ball.evaluated = true;
+            
+            // Check GK Save Overlap
+            const saveWindow = gk.isDiving ? 28 : 22; // Slightly larger hitbox when diving
+            if (Math.abs(gk.x - ball.x) < saveWindow) {
+                // SAVED!
+                shotOutcome = "SAVED!";
+                outcomeTimer = 90;
+                playSavedSound();
+                ball.state = "deflected";
+                // Bouncing deflected ball physics
+                ball.vx = (Math.random() - 0.5) * 6;
+                ball.vy = 4 + Math.random() * 3;
+                scoreGK++;
+            } else {
+                // Inside goal frame check? Left post is 90, Right post is 270, Crossbar is 40
+                if (ball.x >= 90 && ball.x <= 270 && ball.targetY >= 40) {
+                    // GOAL!
+                    shotOutcome = "GOAL!";
+                    outcomeTimer = 90;
+                    playGoalSound();
+                    ball.state = "goal";
+                } else {
+                    // MISS!
+                    shotOutcome = "MISS!";
+                    outcomeTimer = 90;
+                    playMissSound();
+                    ball.state = "miss";
+                }
+            }
+        }
+    }
+
+    // Secondary ball state trajectories post-evaluation
+    if (ball.state === "goal") {
+        // Slow down and rest in the back of the net
+        ball.x += ball.vx * 0.15;
+        ball.y += ball.vy * 0.15;
+        if (ball.y < ball.targetY) {
+            ball.vx = 0;
+            ball.vy = 0;
+        }
+    } else if (ball.state === "deflected") {
+        // Gravity descent simulation back downpitch
+        ball.x += ball.vx;
+        ball.y += ball.vy;
+        ball.vy += 0.25; 
+        if (ball.y > 480) {
+            ball.vx *= 0.8;
+            ball.vy = -ball.vy * 0.4; // bounce dampening
+            if (Math.abs(ball.vy) < 0.5) ball.vy = 0;
+        }
+    } else if (ball.state === "miss") {
+        ball.x += ball.vx;
+        ball.y += ball.vy;
+    }
+
+    if (outcomeTimer > 0) {
+        outcomeTimer--;
+        if (outcomeTimer === 0) {
+            // Check matches and progress state
+            const minRoundsCompleted = currentRound >= 5;
+            const isTie = scorePlayer === scoreGK;
+            
+            if (minRoundsCompleted && !isTie) {
+                state = "result";
+                if (scorePlayer > scoreGK) spawnConfetti();
+            } else if (minRoundsCompleted && isTie) {
+                // Sudden Death Activation
+                currentRound++;
+                resetRound();
+            } else {
+                currentRound++;
+                resetRound();
+            }
+        }
+    }
+}
+
+// === INPUT HANDLING ===
+function getEventCoords(e) {
+    const rect = canvas.getBoundingClientRect();
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    
+    const x = ((clientX - rect.left) / rect.width) * GAME_WIDTH;
+    const y = ((clientY - rect.top) / rect.height) * GAME_HEIGHT;
+    return { x, y };
+}
+
+// Event Listeners for Clicks / Touches
+function handleStartOrDrag(e) {
+    const coords = getEventCoords(e);
+    
+    if (state === "title") {
+        // Button bounds checks
+        if (coords.y >= 380 && coords.y <= 416) {
+            if (coords.x >= 30 && coords.x <= 120) {
+                difficulty = "easy";
+                playButtonClickSound();
+                return;
+            }
+            if (coords.x >= 135 && coords.x <= 225) {
+                difficulty = "medium";
+                playButtonClickSound();
+                return;
+            }
+            if (coords.x >= 240 && coords.x <= 330) {
+                difficulty = "hard";
+                playButtonClickSound();
+                return;
+            }
+        }
+        // Tap to Start (anywhere else)
+        playButtonClickSound();
+        startMatch();
+    } 
+    else if (state === "playing") {
+        // Screenshot Button [📷 SAVE] at bottom-right corner
+        if (coords.x >= 230 && coords.x <= 350 && coords.y >= 590 && coords.y <= 620) {
+            playButtonClickSound();
+            const link = document.createElement('a');
+            link.download = 'pixel_kick_screenshot.png';
+            link.href = canvas.toDataURL('image/png');
+            link.click();
+            return;
+        }
+
+        // Aim Initialization
+        if (ball.state === "idle" && coords.y > 320) {
+            isPowering = true;
+            power = 0;
+            anchorX = coords.x;
+            anchorY = coords.y;
+            targetX = 180;
+            targetY = 80;
+        }
+    } 
+    else if (state === "result") {
+        // Play Again Button Check
+        if (coords.x >= 100 && coords.x <= 260 && coords.y >= 420 && coords.y <= 465) {
+            playButtonClickSound();
+            state = "title";
+        }
+    }
+}
+
+function handleDragMove(e) {
+    if (state === "playing" && isPowering) {
+        const coords = getEventCoords(e);
+        const dx = coords.x - anchorX;
+        const dy = coords.y - anchorY;
+        
+        targetX = 180 + dx * 1.5;
+        targetY = 80 + dy * 0.8;
+        
+        // Clamp indicators
+        targetX = Math.max(50, Math.min(310, targetX));
+        targetY = Math.max(30, Math.min(130, targetY));
+    }
+}
+
+function handleDragEnd(e) {
+    if (state === "playing" && isPowering) {
+        isPowering = false;
+        fireShot(power);
+    }
+}
+
+// Mouse Bindings
+canvas.addEventListener('mousedown', handleStartOrDrag);
+window.addEventListener('mousemove', handleDragMove);
+window.addEventListener('mouseup', handleDragEnd);
+
+// Touch Bindings
+canvas.addEventListener('touchstart', handleStartOrDrag);
+canvas.addEventListener('touchmove', handleDragMove);
+canvas.addEventListener('touchend', handleDragEnd);
+
+// Keyboard Desktop testing bindings
+const keys = {};
+window.addEventListener('keydown', e => {
+    keys[e.code] = true;
+    if (e.code === "Space" && state === "playing" && ball.state === "idle" && !isPowering) {
+        isPowering = true;
+        power = 0;
+    }
+});
+window.addEventListener('keyup', e => {
+    keys[e.code] = false;
+    if (e.code === "Space" && state === "playing" && isPowering) {
+        isPowering = false;
+        fireShot(power);
+    }
+});
+
+function handleKeyboardAim() {
+    if (state === "playing" && ball.state === "idle") {
+        if (keys["ArrowLeft"]) targetX = Math.max(50, targetX - 2.5);
+        if (keys["ArrowRight"]) targetX = Math.min(310, targetX + 2.5);
+        if (keys["ArrowUp"]) targetY = Math.max(30, targetY - 1.5);
+        if (keys["ArrowDown"]) targetY = Math.min(130, targetY + 1.5);
+    }
+}
+
+// === SCREENS ===
+function drawField() {
+    // Deep Night Sky
+    ctx.fillStyle = "#0c0a1c";
+    ctx.fillRect(0, 0, GAME_WIDTH, 100);
+    
+    // Pixel Stars
+    ctx.fillStyle = "#1d193d";
+    for (let i = 10; i < GAME_WIDTH; i += 40) {
+        ctx.fillRect(i, 20 + (i % 3) * 6, 2, 2);
+    }
+    
+    // Stadium Lighting Towers
+    ctx.fillStyle = "#2d2a44";
+    ctx.fillRect(10, 10, 4, 90);
+    ctx.fillRect(4, 10, 16, 12);
+    ctx.fillStyle = "#ffffaa";
+    ctx.fillRect(6, 12, 4, 8);
+    ctx.fillRect(14, 12, 4, 8);
+    
+    ctx.fillStyle = "#2d2a44";
+    ctx.fillRect(346, 10, 4, 90);
+    ctx.fillRect(340, 10, 16, 12);
+    ctx.fillStyle = "#ffffaa";
+    ctx.fillRect(342, 12, 4, 8);
+    ctx.fillRect(350, 12, 4, 8);
+
+    // Crowd silhouettes
+    ctx.fillStyle = "#141125";
+    ctx.fillRect(0, 85, GAME_WIDTH, 15);
+    ctx.fillStyle = "#1b1830";
+    for (let x = 0; x < GAME_WIDTH; x += 6) {
+        const h = 5 + (x % 4) * 2;
+        ctx.fillRect(x, 85 - h, 4, h);
+    }
+
+    // Sponsor boards (y: 100 to 115)
+    const boardColors = ["#d02020", "#2050d0", "#ffd700", "#111111"];
+    for (let i = 0; i < GAME_WIDTH; i += 60) {
+        ctx.fillStyle = boardColors[(i / 60) % boardColors.length];
+        ctx.fillRect(i, 100, 58, 15);
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(i + 12, 106, 34, 3);
+    }
+
+    // Grass Field Texture Grid
+    for (let y = 115; y < GAME_HEIGHT; y += 8) {
+        ctx.fillStyle = (Math.floor(y / 8) % 2 === 0) ? "#0f5e1c" : "#1b8a32";
+        ctx.fillRect(0, y, GAME_WIDTH, 8);
+    }
+
+    // Field line markings
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.3)";
+    ctx.lineWidth = 2;
+    
+    // Goal line
+    ctx.beginPath();
+    ctx.moveTo(0, 120);
+    ctx.lineTo(GAME_WIDTH, 120);
+    ctx.stroke();
+
+    // Penalty Box Area
+    ctx.beginPath();
+    ctx.moveTo(40, 120);
+    ctx.lineTo(40, 300);
+    ctx.lineTo(320, 300);
+    ctx.lineTo(320, 120);
+    ctx.stroke();
+
+    // Penalty Spot (180, 480)
+    ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
+    ctx.fillRect(177, 477, 6, 6);
+
+    // Penalty arc
+    ctx.beginPath();
+    ctx.arc(180, 480, 90, 0.9 * Math.PI, 0.1 * Math.PI, true);
+    ctx.stroke();
+
+    // Center Circle (bottom boundary)
+    ctx.beginPath();
+    ctx.arc(180, 640, 110, Math.PI, 2 * Math.PI, false);
+    ctx.stroke();
+}
+
+function drawGoal() {
+    // Goal Net Backing
+    ctx.strokeStyle = "#444455";
+    ctx.lineWidth = 1;
+    for (let gy = 40; gy <= 120; gy += 8) {
+        ctx.beginPath();
+        ctx.moveTo(90, gy);
+        ctx.lineTo(270, gy);
+        ctx.stroke();
+    }
+    for (let gx = 90; gx <= 270; gx += 8) {
+        ctx.beginPath();
+        ctx.moveTo(gx, 40);
+        ctx.lineTo(gx, 120);
+        ctx.stroke();
+    }
+
+    // Goal Frame Posts
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(88, 40, 4, 80); // Left Post
+    ctx.fillRect(268, 40, 4, 80); // Right Post
+    ctx.fillRect(88, 38, 184, 4); // Crossbar
+}
+
+function drawPixelButton(ctx, text, x, y, w, h, active) {
+    ctx.fillStyle = "#111111";
+    ctx.fillRect(x, y, w, h);
+    
+    ctx.fillStyle = active ? "#ffd700" : "#444444";
+    ctx.fillRect(x + 2, y + 2, w - 4, h - 4);
+    
+    ctx.fillStyle = active ? "#ffffff" : "#888888";
+    ctx.fillRect(x + 2, y + 2, w - 4, 2);
+    ctx.fillRect(x + 2, y + 2, 2, h - 4);
+    
+    const textLen = text.length;
+    const charScale = 2;
+    const textWidth = textLen * 6 * charScale;
+    const textHeight = 5 * charScale;
+    const tx = x + (w - textWidth) / 2 + 1;
+    const ty = y + (h - textHeight) / 2;
+    drawPixelText(ctx, text, tx, ty, charScale, active ? "#111111" : "#ffffff");
+}
+
+function drawTitleScreen() {
+    drawField();
+    drawGoal();
+
+    // Shadows
+    drawPixelSprite(ctx, 180, 528, PLAYER_IDLE, { 1: "#0b3d12" }, 4);
+
+    // Bouncing Ball on title menu
+    const bounceY = 510 + Math.sin(Date.now() / 150) * 15;
+    drawPixelSprite(ctx, 180, bounceY, BALL_SPRITE, BALL_PALETTE, 4);
+
+    // Title Title Banner
+    drawPixelText(ctx, "PIXEL KICK", 34, 160, 6, "#ffd700");
+    drawPixelText(ctx, "RETRO PENALTY SHOOTOUT", 44, 225, 2, "#ffffff");
+
+    // Difficulty settings
+    drawPixelText(ctx, "DIFFICULTY:", 110, 350, 2, "#ffffff");
+    drawPixelButton(ctx, "EASY", 30, 380, 90, 36, difficulty === "easy");
+    drawPixelButton(ctx, "MED", 135, 380, 90, 36, difficulty === "medium");
+    drawPixelButton(ctx, "HARD", 240, 380, 90, 36, difficulty === "hard");
+
+    // Pulsing Start Prompt
+    const pulse = Math.floor(Date.now() / 500) % 2 === 0;
+    if (pulse) {
+        drawPixelText(ctx, "TAP ANYWHERE TO START", 55, 450, 2, "#ffd700");
+    }
+}
+
+function drawGameScreen() {
+    drawField();
+    drawGoal();
+
+    // Shadows
+    ctx.fillStyle = "rgba(0, 0, 0, 0.25)";
+    ctx.beginPath();
+    ctx.ellipse(gk.x, 120, 20, 6, 0, 0, 2 * Math.PI);
+    ctx.ellipse(player.x, 520, 16, 5, 0, 0, 2 * Math.PI);
+    ctx.fill();
+
+    // Draw Goalkeeper
+    let gkFrame = (gk.frame === 0) ? GK_IDLE_1 : GK_IDLE_2;
+    let gkRotation = 0;
+    if (gk.state === "diving") {
+        gkFrame = GK_DIVE;
+        if (gk.targetX < 180) {
+            gkRotation = -0.4;
+        } else if (gk.targetX > 180) {
+            gkRotation = 0.4;
+        }
+    }
+    drawPixelSprite(ctx, gk.x, gk.y - 25, gkFrame, GK_PALETTE, 3, gkRotation);
+
+    // Draw Player
+    let pFrame = (player.state === "kicking") ? PLAYER_KICK : PLAYER_IDLE;
+    drawPixelSprite(ctx, player.x, player.y, pFrame, PLAYER_PALETTE, 3);
+
+    // Draw Ball (Depth scale calculation)
+    const t = (ball.y - 120) / (480 - 120); 
+    const currentScale = 1.5 + t * 2.5; // Scales between 1.5 and 4
+    drawPixelSprite(ctx, ball.x, ball.y, BALL_SPRITE, BALL_PALETTE, currentScale, ball.angle);
+
+    // HUD Display Banner
+    ctx.fillStyle = "#111111";
+    ctx.fillRect(0, 0, GAME_WIDTH, 36);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 36, GAME_WIDTH, 2);
+
+    const roundLabel = currentRound > 5 ? "SUDDEN DEATH" : `ROUND ${currentRound}/5`;
+    drawPixelText(ctx, roundLabel, 10, 12, 1.5, "#ffd700");
+    drawPixelText(ctx, `YOU:${scorePlayer} GK:${scoreGK}`, 235, 12, 1.5, "#ffffff");
+
+    // Aim Indicator Arc / Target
+    if (isPowering && ball.state === "idle") {
+        ctx.save();
+        ctx.strokeStyle = "rgba(255, 215, 0, 0.6)";
+        ctx.setLineDash([4, 4]);
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(180, 480);
+        ctx.lineTo(targetX, targetY);
+        ctx.stroke();
+        ctx.restore();
+
+        // Target Reticle
+        ctx.fillStyle = "#ff3333";
+        ctx.fillRect(targetX - 5, targetY, 11, 2);
+        ctx.fillRect(targetX, targetY - 5, 2, 11);
+    }
+
+    // Power Bar Indicator (Left edge HUD element)
+    if (isPowering) {
+        const barHeight = 150;
+        const barWidth = 12;
+        const bx = 15;
+        const by = 260;
+        
+        ctx.fillStyle = "#111111";
+        ctx.fillRect(bx, by, barWidth, barHeight);
+        
+        const filledHeight = Math.floor(power * (barHeight - 4));
+        for (let dy = 0; dy < filledHeight; dy += 4) {
+            const ratio = dy / barHeight;
+            let color = "#33ff33";
+            if (ratio > 0.5 && ratio <= 0.8) color = "#ffd700";
+            else if (ratio > 0.8) color = "#ff3333";
+            
+            ctx.fillStyle = color;
+            ctx.fillRect(bx + 2, by + barHeight - 2 - dy, barWidth - 4, 3);
+        }
+        
+        drawPixelText(ctx, "PWR", bx - 3, by - 16, 1.5, "#ffffff");
+    }
+
+    // Result Outcome Banner popups
+    if (shotOutcome) {
+        ctx.fillStyle = "rgba(11, 11, 11, 0.85)";
+        ctx.fillRect(30, 240, 300, 70);
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(30, 240, 300, 3);
+        ctx.fillRect(30, 307, 300, 3);
+        
+        let color = "#ffffff";
+        if (shotOutcome === "GOAL!") color = "#33ff33";
+        if (shotOutcome === "SAVED!") color = "#ffd700";
+        if (shotOutcome === "MISS!") color = "#ff3333";
+        
+        const textLen = shotOutcome.length;
+        const size = 5;
+        const textWidth = textLen * 6 * size;
+        const tx = (GAME_WIDTH - textWidth) / 2;
+        drawPixelText(ctx, shotOutcome, tx, 252, size, color);
+    }
+
+    // Screenshot button rendering
+    drawPixelButton(ctx, "[C] SAVE", 240, 590, 110, 30, false);
+}
+
+function drawResultScreen() {
+    drawField();
+    drawGoal();
+
+    // Confetti simulation loop
+    if (scorePlayer > scoreGK) {
+        drawConfetti(ctx);
+    }
+
+    // Centered dialogue frames
+    ctx.fillStyle = "rgba(11, 11, 11, 0.9)";
+    ctx.fillRect(30, 160, 300, 240);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(30, 160, 300, 4);
+    ctx.fillRect(30, 396, 300, 4);
+
+    const playerWon = scorePlayer > scoreGK;
+    const titleText = playerWon ? "VICTORY!" : "DEFEAT!";
+    const titleColor = playerWon ? "#33ff33" : "#ff3333";
+    
+    const tx = (GAME_WIDTH - (titleText.length * 30)) / 2;
+    drawPixelText(ctx, titleText, tx, 190, 5, titleColor);
+
+    drawPixelText(ctx, `FINAL SCORE`, 115, 270, 2, "#ffffff");
+    
+    const scoreText = `${scorePlayer} - ${scoreGK}`;
+    const sx = (GAME_WIDTH - (scoreText.length * 24)) / 2;
+    drawPixelText(ctx, scoreText, sx, 300, 4, "#ffd700");
+
+    drawPixelButton(ctx, "PLAY AGAIN", 100, 420, 160, 45, true);
+}
+
+// === GAME LOOP ===
+function tick(time) {
+    if (lastTime === 0) lastTime = time;
+    const dt = time - lastTime;
+    lastTime = time;
+
+    // Build power up to max in 1.5s
+    if (isPowering) {
+        power += dt / 1500;
+        if (power > 1.0) power = 1.0;
+    }
+
+    ctx.clearRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+
+    if (state === "title") {
+        drawTitleScreen();
+    } 
+    else if (state === "playing") {
+        handleKeyboardAim();
+        updateGoalkeeper();
+        updatePhysics();
+        drawGameScreen();
+    } 
+    else if (state === "result") {
+        if (scorePlayer > scoreGK) {
+            updateConfetti();
+        }
+        drawResultScreen();
+    }
+
+    requestAnimationFrame(tick);
+}
+
+let lastTime = 0;
+requestAnimationFrame(tick);
+
+</script>
+</body>
+</html>
